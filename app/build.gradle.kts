@@ -1,6 +1,8 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    kotlin("plugin.serialization") version "1.8.21" // Aquí está la línea que debes agregar para usar la serialización
+
 
 }
 
@@ -53,6 +55,9 @@ android {
 
 dependencies {
 
+
+    implementation("com.squareup.okhttp3:okhttp:4.10.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
@@ -61,6 +66,9 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.room.common)
+    implementation(libs.firebase.crashlytics.buildtools)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
@@ -68,4 +76,13 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+
+        implementation("io.ktor:ktor-client-core:2.3.0")
+        implementation("io.ktor:ktor-client-android:2.3.0")
+        implementation("io.ktor:ktor-client-serialization:2.3.0") // Serialización
+        implementation("io.ktor:ktor-client-json:2.3.0") // JSON
+        implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3") // Serialización Kotlinx
+
+
+
 }
