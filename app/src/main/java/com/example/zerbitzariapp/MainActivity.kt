@@ -1,6 +1,5 @@
 package com.example.zerbitzariapp
 
-import android.net.http.HttpResponseCache.install
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -26,15 +25,21 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.zerbitzariapp.ui.theme.ZerbitzariAppTheme
-import com.google.firebase.crashlytics.buildtools.reloc.org.apache.http.client.HttpClient
-import com.google.firebase.crashlytics.buildtools.reloc.org.apache.http.entity.ContentType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.Response
 import org.json.JSONArray
+import org.json.JSONObject
+import java.io.IOException
+import okhttp3.*
+
 
 
 
@@ -205,16 +210,25 @@ sealed class Screen {
 @Composable
 fun NavigationHandler() {
     var currentScreen by remember { mutableStateOf<Screen>(Screen.CharlieApp) }
+    var currentZerbitzaria by remember { mutableStateOf<Zerbitzaria?>(null) }
 
     when (currentScreen) {
         is Screen.CharlieApp ->
             CharlieApp(onNavigateToMainScreen = { currentScreen = Screen.MainScreen })
 
         is Screen.MainScreen ->
-            MainScreen(onNavigateToMahaiakAukeratu = { currentScreen = Screen.MahaiakAukeratu })
+            MainScreen(onNavigateToMahaiakAukeratu = { zerbitzaria ->
+                currentZerbitzaria = zerbitzaria
+                currentScreen = Screen.MahaiakAukeratu
+            })
 
         is Screen.MahaiakAukeratu ->
-            MahaiakAukeratu(onNavigateToKomandaAukeratu = { currentScreen = Screen.KomandaAukeratu })
+            currentZerbitzaria?.let {
+                MahaiakAukeratu(
+                    zerbitzaria = it,  // Pasamos el Zerbitzaria a MahaiakAukeratu
+                    onNavigateToKomandaAukeratu = { currentScreen = Screen.KomandaAukeratu }
+                )
+            }
 
         is Screen.KomandaAukeratu ->
             KomandaAukeratuScreen(
@@ -237,10 +251,50 @@ fun NavigationHandler() {
         is Screen.EdariakScreen ->
             EdariakScreen(onNavigateToKomandaAukeratu = { currentScreen = Screen.KomandaAukeratu })
 
-        is Screen.KomandaScreen -> KomandaScreen()
+        is Screen.KomandaScreen ->
+            KomandaScreen()
     }
 }
 
+
+
+fun insertErreserba(langileaId: Int, mesaSeleccionada: Int, selectedItems: List<Map<String, Any>>, onResult: (Boolean) -> Unit) {
+    val client = OkHttpClient()
+    val url = "http://10.0.2.2/insertEskaera.php"
+
+    val jsonBody = JSONObject().apply {
+        put("mahaila_id", mesaSeleccionada)
+        put("langilea_id", JSONArray(selectedItems.map { it["id"] }))
+        put("data", "ez")
+
+
+    }
+
+    val requestBody = RequestBody.create(
+        "application/json; charset=utf-8".toMediaType(),
+        jsonBody.toString()
+    )
+
+    val request = Request.Builder()
+        .url(url)
+        .post(requestBody)
+        .build()
+
+    client.newCall(request).enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            e.printStackTrace()
+            onResult(false)
+        }
+
+        override fun onResponse(call: Call, response: Response) {
+            if (response.isSuccessful) {
+                onResult(true)
+            } else {
+                onResult(false)
+            }
+        }
+    })
+}
 
 @Composable
 fun ProduktuaListScreen(mota: Int, title: String, onNavigateToKomandaAukeratu: () -> Unit) {
@@ -248,7 +302,7 @@ fun ProduktuaListScreen(mota: Int, title: String, onNavigateToKomandaAukeratu: (
     var isLoading by remember { mutableStateOf(true) }
     val selectedQuantities = remember { mutableStateOf<Map<Int, Int>>(emptyMap()) }
 
-    // Fetch data filtered by mota
+
     LaunchedEffect(Unit) {
         fetchProduktua { result ->
             produktuak = result.filter { it.mota == mota }
@@ -292,7 +346,7 @@ fun ProduktuaListScreen(mota: Int, title: String, onNavigateToKomandaAukeratu: (
         } else {
             produktuak.forEach { produktua ->
                 KomandaItemRow(
-                    itemName = "${produktua.izena}",
+                    itemName = produktua.izena,
                     initialQuantity = 0,
                     onQuantityChanged = { quantity ->
                         // Update the quantity of the product in the map
@@ -309,7 +363,6 @@ fun ProduktuaListScreen(mota: Int, title: String, onNavigateToKomandaAukeratu: (
 
         Button(
             onClick = {
-                // Handle inserting to the database
                 onNavigateToKomandaAukeratu()
             },
             modifier = Modifier
@@ -416,14 +469,11 @@ fun CharlieApp(onNavigateToMainScreen: () -> Unit) {
 }
 
 @Composable
-fun MainScreen(onNavigateToMahaiakAukeratu: () -> Unit) {
-    // Estado para almacenar los nombres de los botones obtenidos
+fun MainScreen(onNavigateToMahaiakAukeratu: (Zerbitzaria) -> Unit) {
     var zerbitzariak by remember { mutableStateOf<List<Zerbitzaria>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
-    // Lanza la carga de datos cuando la pantalla se crea
     LaunchedEffect(Unit) {
-        // Llamar a la función fetchMesas
         fetchErabiltzaileak { result ->
             zerbitzariak = result
             isLoading = false
@@ -433,51 +483,50 @@ fun MainScreen(onNavigateToMahaiakAukeratu: () -> Unit) {
     Scaffold(
         topBar = {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(10.dp),
+                modifier = Modifier.fillMaxWidth().padding(10.dp),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Button(
                     border = BorderStroke(2.dp, Color.Black),
                     onClick = { /* Acción de Atzera */ },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6600))
-                ) {
-                    Text("Atzera", color = Color.Black)
-                }
+                ) { Text("Atzera", color = Color.Black) }
                 Button(
                     border = BorderStroke(2.dp, Color.Black),
                     onClick = { /* Acción de Txat */ },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6600))
-                ) {
-                    Text("Txat", color = Color.Black)
-                }
+                ) { Text("Txat", color = Color.Black) }
             }
         }
     ) { paddingValues ->
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues),
+            modifier = Modifier.fillMaxSize().padding(paddingValues),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceEvenly
         ) {
-            // Si los datos aún están cargando, muestra un indicador de carga
             if (isLoading) {
                 CircularProgressIndicator()
             } else {
-                // Mostrar los botones dinámicamente
-                zerbitzariak.forEach { Zerbitzaria ->
-
-                    ZerbitzariaButton(id = Zerbitzaria.id, text = Zerbitzaria.izena, onNavigateToMahaiakAukeratu = onNavigateToMahaiakAukeratu)
+                zerbitzariak.forEach { zerbitzaria ->
+                    ZerbitzariaButton(
+                        id = zerbitzaria.id,
+                        text = zerbitzaria.izena,
+                        zerbitzaria = zerbitzaria,
+                        onNavigateToMahaiakAukeratu = { selectedZerbitzaria ->
+                            onNavigateToMahaiakAukeratu(selectedZerbitzaria)
+                        }
+                    )
                 }
             }
         }
     }
 }
 
+
+
+
 @Composable
-fun MahaiakAukeratu(onNavigateToKomandaAukeratu: () -> Unit) {
+fun MahaiakAukeratu(zerbitzaria: Zerbitzaria, onNavigateToKomandaAukeratu: () -> Unit) {
     val tableList = remember { mutableStateOf<List<String>>(emptyList()) }
 
     LaunchedEffect(Unit) {
@@ -516,32 +565,43 @@ fun MahaiakAukeratu(onNavigateToKomandaAukeratu: () -> Unit) {
                 .fillMaxSize()
                 .padding(paddingValues),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)  // Espaciado entre los elementos
         ) {
             tableList.value.chunked(2).forEach { rowTables ->
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp)  // Asegura que haya espacio en los laterales
+                        .padding(horizontal = 16.dp)
                 ) {
                     rowTables.forEach { table ->
                         Box(
-                            modifier = Modifier.weight(1f)  // Hace que los botones ocupen la mitad del ancho
+                            modifier = Modifier.weight(1f)
                         ) {
                             MahaiaButton(
                                 text = table,
                                 function = onNavigateToKomandaAukeratu
-
-
                             )
                         }
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.weight(1f))  // Esto empuja el texto hacia la parte inferior
+
+            // Aquí agregas el nombre del Zerbitzaria en la parte inferior de la pantalla
+            Text(
+                text = "Zerbitzaria: ${zerbitzaria.izena}",
+                fontSize = 20.sp,
+                color = Color.Black,
+                modifier = Modifier.padding(16.dp)  // Agregar un poco de padding
+            )
         }
     }
 }
+
+
+
 
 
 @Composable
@@ -648,10 +708,15 @@ fun KomandaAukeratuScreen(
 }
 
 @Composable
-fun ZerbitzariaButton( id: Int, text: String, onNavigateToMahaiakAukeratu: () -> Unit) {
+fun ZerbitzariaButton(
+    id: Int,
+    text: String,
+    zerbitzaria: Zerbitzaria,  // Pasamos el Zerbitzaria completo aquí
+    onNavigateToMahaiakAukeratu: (Zerbitzaria) -> Unit
+) {
     Button(
         border = BorderStroke(2.dp, Color.Black),
-        onClick = onNavigateToMahaiakAukeratu, /*insertZerbitzariaEskaeran(id, text),*/
+        onClick = { onNavigateToMahaiakAukeratu(zerbitzaria) },  // Llamamos a la función pasando el Zerbitzaria
         shape = RoundedCornerShape(50.dp),
         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6600)),
         modifier = Modifier
@@ -661,6 +726,10 @@ fun ZerbitzariaButton( id: Int, text: String, onNavigateToMahaiakAukeratu: () ->
         Text(text, fontSize = 16.sp, color = Color.Black)
     }
 }
+
+
+
+
 
 @Composable
 fun KomandaScreen() {
@@ -786,17 +855,24 @@ fun KomandaAukeratuScreenPreview() {
 @Composable
 fun MahaiakAukeratuPreview() {
     ZerbitzariAppTheme {
-        MahaiakAukeratu(onNavigateToKomandaAukeratu = {})
+        // Creas un objeto Zerbitzaria con valores estáticos
+        val testZerbitzaria = Zerbitzaria(id = 1, izena = "Test Zerbitzaria")
+
+        // Pasamos el objeto Zerbitzaria y una función vacía para la navegación
+        MahaiakAukeratu(zerbitzaria = testZerbitzaria, onNavigateToKomandaAukeratu = {})
     }
 }
+
 
 @Preview(showBackground = true)
 @Composable
 fun MainScreenPreview() {
     ZerbitzariAppTheme {
-        MainScreen(onNavigateToMahaiakAukeratu = {})
+        // Definimos una función vacía para la navegación
+        MainScreen(onNavigateToMahaiakAukeratu = { /* No hacemos nada en el Preview */ })
     }
 }
+
 
 @Preview(showBackground = true)
 @Composable
