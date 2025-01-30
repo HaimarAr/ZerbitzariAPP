@@ -1,26 +1,37 @@
 package com.example.zerbitzariapp
 
+import android.annotation.SuppressLint
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -33,14 +44,21 @@ import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import okhttp3.*
-
-
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.OutputStreamWriter
+import java.io.PrintWriter
+import java.net.Socket
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.math.log
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -54,6 +72,185 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+var Erabiltzaileid: Int = 0;
+var MahaiaId: Int = 0;
+var ErreserbaId: Int? = 0;
+
+
+
+data class EskaeraProduktua(
+    val name: String,
+    val quantity: Int,
+    val price: Double
+)
+
+var eskaeraProduktuak: MutableList<EskaeraProduktua> = mutableListOf()
+
+
+
+@SuppressLint("RememberReturnType")
+@Composable
+fun ChatScreen(onNavigateToChat: () -> Unit,
+               onNavigateToMahaiakAukeratu: () -> Unit,
+
+) {
+    var messageText by remember { mutableStateOf("") }
+    val messages = remember { mutableStateListOf<Pair<String, Boolean>>() }
+    val chatClient = remember { ChatClient(messages) }
+
+    // Conectar al servidor cuando se inicia la pantalla
+    LaunchedEffect(true) {
+        chatClient.connect()
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Mostrar los mensajes
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Button(
+                border = BorderStroke(2.dp, Color.Black),
+                onClick = { onNavigateToMahaiakAukeratu() },
+                colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
+            ) {
+                Text(text = "Atzera", color = Color.Black)
+            }
+
+            Button(
+                border = BorderStroke(2.dp, Color.Black),
+                onClick = { onNavigateToChat() },  // Navegar a la pantalla de chat
+                colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
+            ) {
+                Text(text = "Txat", color = Color.Black)
+            }
+
+        }
+
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(messages) { (message, isUser) ->
+                MessageItem(message = message, isUser = isUser)
+            }
+        }
+
+        // Campo de texto para el mensaje
+        Row(modifier = Modifier.padding(16.dp)) {
+            TextField(
+                value = messageText,
+                onValueChange = { messageText = it },
+                label = { Text("Escribe tu mensaje...") },
+                modifier = Modifier.weight(1f)
+            )
+
+            IconButton(onClick = {
+                if (messageText.isNotBlank()) {
+                    chatClient.sendMessage(messageText) // Enviar mensaje al servidor
+                    messageText = "" // Limpiar campo de texto
+                }
+            }) {
+                Icon(imageVector = Icons.Default.Send, contentDescription = "Send")
+            }
+        }
+    }
+}
+
+@Composable
+fun MessageItem(message: String, isUser: Boolean) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+    ) {
+        Box(
+            modifier = Modifier
+                .background(
+                    color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
+                    shape = MaterialTheme.shapes.medium
+                )
+                .padding(8.dp)
+        ) {
+            Text(text = message, color = MaterialTheme.colorScheme.onPrimary)
+        }
+    }
+}
+
+
+class ChatClient(private val messages: MutableList<Pair<String, Boolean>>) {
+
+    private var out: PrintWriter? = null
+    private var reader: BufferedReader? = null
+    private var socket: Socket? = null
+
+    // Conexión al servidor
+    suspend fun connect() {
+        try {
+            // Crear el socket de manera segura en el hilo de fondo
+            socket = withContext(Dispatchers.IO) {
+                Socket("192.168.115.188", 5555) // IP del servidor
+            }
+            out = PrintWriter(OutputStreamWriter(socket!!.getOutputStream()), true)
+            reader = BufferedReader(InputStreamReader(socket!!.getInputStream()))
+
+            // Hilo separado para recibir mensajes
+            withContext(Dispatchers.IO) {
+                while (true) {
+                    val message = reader?.readLine() ?: break
+                    // Actualizar los mensajes en el hilo principal
+                    messages.add(Pair(message, false)) // false indica que es un mensaje del servidor
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            // En caso de error, mostrarlo en el hilo principal
+            messages.add(Pair("Error al conectar con el servidor: ${e.message}", false))
+        }
+    }
+
+    fun sendMessage(message: String) {
+        try {
+            // Verificar si el socket está conectado
+            if (socket == null || socket!!.isClosed || !socket!!.isConnected) {
+                messages.add(Pair("Error: El socket no está conectado.", false))
+                return
+            }
+
+            // Asegurarse de que el PrintWriter no sea nulo
+            out?.let { writer ->
+                val prefixedMessage = "[Zerbitzaria] $message"
+                writer.println(prefixedMessage) // Enviar al servidor
+
+                // Agregar el mensaje al historial de mensajes
+                messages.add(Pair(message, true)) // true indica que es del usuario
+            } ?: run {
+                // Si PrintWriter no está inicializado correctamente
+                messages.add(Pair("Error: PrintWriter no está inicializado.", false))
+            }
+
+        } catch (e: IOException) {
+            // Captura de excepciones de IO, como errores de red
+            e.printStackTrace()
+            messages.add(Pair("Error al enviar el mensaje: ${e.message}", false))
+        } catch (e: Exception) {
+            // Captura de cualquier otra excepción inesperada
+            e.printStackTrace()
+            messages.add(Pair("Error inesperado: ${e.message}", false))
+        }
+    }
+
+
+    // Método para desconectar el cliente (si es necesario)
+    fun disconnect() {
+        try {
+            socket?.close()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+}
+
+
 
 
 fun fetchTables(onResult: (List<String>) -> Unit) {
@@ -75,7 +272,7 @@ fun fetchTables(onResult: (List<String>) -> Unit) {
                 if (!jsonData.isNullOrEmpty()) {
                     val jsonArray = JSONArray(jsonData)
                     for (i in 0 until jsonArray.length()) {
-                        val table = jsonArray.getJSONObject(i).getString("id") // Aquí asumes que el JSON tiene un campo "id"
+                        val table = jsonArray.getJSONObject(i).getString("mahaia_id") // Aquí asumes que el JSON tiene un campo "id"
                         tableList.add(table)
                     }
                 }
@@ -173,7 +370,7 @@ fun fetchErabiltzaileak(onResult: (List<Zerbitzaria>) -> Unit) {
                         val jsonObject = jsonArray.getJSONObject(i)
                         val zerbitzaria = Zerbitzaria(
                             id = jsonObject.getInt("id"),
-                            izena = jsonObject.getString("izena")
+                            izenaZ = jsonObject.getString("erabiltzaileIzena")
                         )
                         zerbitzariak.add(zerbitzaria)
                     }
@@ -194,86 +391,117 @@ fun fetchErabiltzaileak(onResult: (List<Zerbitzaria>) -> Unit) {
     }
 }
 
-sealed class Screen {
-    object CharlieApp : Screen()
-    object MainScreen : Screen()
-    object MahaiakAukeratu : Screen()
-    object KomandaAukeratu : Screen()
-    object EntranteakScreen : Screen()
-    object KomandaScreen : Screen()
-    object LehenPlateraScreen: Screen()
-    object EdariakScreen: Screen()
-    object PostreakScreen: Screen()
-
-}
-
-@Composable
-fun NavigationHandler() {
-    var currentScreen by remember { mutableStateOf<Screen>(Screen.CharlieApp) }
-    var currentZerbitzaria by remember { mutableStateOf<Zerbitzaria?>(null) }
-
-    when (currentScreen) {
-        is Screen.CharlieApp ->
-            CharlieApp(onNavigateToMainScreen = { currentScreen = Screen.MainScreen })
-
-        is Screen.MainScreen ->
-            MainScreen(onNavigateToMahaiakAukeratu = { zerbitzaria ->
-                currentZerbitzaria = zerbitzaria
-                currentScreen = Screen.MahaiakAukeratu
-            })
-
-        is Screen.MahaiakAukeratu ->
-            currentZerbitzaria?.let {
-                MahaiakAukeratu(
-                    zerbitzaria = it,  // Pasamos el Zerbitzaria a MahaiakAukeratu
-                    onNavigateToKomandaAukeratu = { currentScreen = Screen.KomandaAukeratu }
-                )
-            }
-
-        is Screen.KomandaAukeratu ->
-            KomandaAukeratuScreen(
-                onNavigateToEntranteak = { currentScreen = Screen.EntranteakScreen },
-                onNavigateToLehenPlatera = { currentScreen = Screen.LehenPlateraScreen },
-                onNavigateToPostreak = { currentScreen = Screen.PostreakScreen },
-                onNavigateToEdariak = { currentScreen = Screen.EdariakScreen },
-                onNavigateToKomanda = { currentScreen = Screen.KomandaScreen }
-            )
-
-        is Screen.EntranteakScreen ->
-            EntranteakScreen(onNavigateToKomandaAukeratu = { currentScreen = Screen.KomandaAukeratu })
-
-        is Screen.LehenPlateraScreen ->
-            LehenPlateraScreen(onNavigateToKomandaAukeratu = { currentScreen = Screen.KomandaAukeratu })
-
-        is Screen.PostreakScreen ->
-            PostreakScreen(onNavigateToKomandaAukeratu = { currentScreen = Screen.KomandaAukeratu })
-
-        is Screen.EdariakScreen ->
-            EdariakScreen(onNavigateToKomandaAukeratu = { currentScreen = Screen.KomandaAukeratu })
-
-        is Screen.KomandaScreen ->
-            KomandaScreen()
-    }
-}
-
-
-
-fun insertErreserba(langileaId: Int, mesaSeleccionada: Int, selectedItems: List<Map<String, Any>>, onResult: (Boolean) -> Unit) {
+fun fetchHighestErreserbaId(onResult: (Int?) -> Unit) {
     val client = OkHttpClient()
-    val url = "http://10.0.2.2/insertEskaera.php"
+    val url = "http://10.0.2.2/getErreserba.php" // Cambia esto si usas un dispositivo físico
+    val request = Request.Builder()
+        .url(url)
+        .build()
 
-    val jsonBody = JSONObject().apply {
-        put("mahaila_id", mesaSeleccionada)
-        put("langilea_id", JSONArray(selectedItems.map { it["id"] }))
-        put("data", "ez")
+    CoroutineScope(Dispatchers.IO).launch {
+        try {
+            val response = client.newCall(request).execute()
 
+            if (response.isSuccessful) {
+                val jsonData = response.body?.string()
 
+                var maxErreserbaId: Int? = null
+
+                if (!jsonData.isNullOrEmpty()) {
+                    val jsonObject = JSONObject(jsonData)
+                    maxErreserbaId = jsonObject.optString("erreserba_id")?.toIntOrNull()
+                }
+
+                Log.d("FetchHighestErreserbaId", "Highest ErreserbaId: $maxErreserbaId")
+
+                withContext(Dispatchers.Main) {
+                    onResult(maxErreserbaId)
+                }
+            } else {
+                Log.e("FetchHighestErreserbaId", "Error: ${response.code}")
+                withContext(Dispatchers.Main) { onResult(null) }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Log.e("FetchHighestErreserbaId", "Request failed: ${e.message}")
+            withContext(Dispatchers.Main) { onResult(null) }
+        }
+    }
+}
+
+fun fetchMaxEskaera(onResult: (List<EskaeraProduktua>?) -> Unit) {
+    val client = OkHttpClient()
+    val url = "http://10.0.2.2/getEskaeraProduktua.php"
+
+    val request = Request.Builder()
+        .url(url)
+        .get()
+        .build()
+
+    client.newCall(request).enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            e.printStackTrace()
+            onResult(null)
+        }
+
+        override fun onResponse(call: Call, response: Response) {
+            response.body?.string()?.let { responseBody ->
+                try {
+                    val jsonResponse = JSONObject(responseBody)
+                    if (jsonResponse.getBoolean("success")) {
+                        val data = jsonResponse.getJSONArray("data1")
+                         eskaeraProduktuak = mutableListOf<EskaeraProduktua>()
+                        for (i in 0 until data.length()) {
+                            val item = data.getJSONObject(i)
+                            eskaeraProduktuak.add(
+                                EskaeraProduktua(
+                                    name = item.getString("produktu_izena"),
+                                    quantity = item.getInt("produktuaKop"),
+                                    price = item.getDouble("prezioa")
+                                )
+                            )
+                        }
+                        onResult(eskaeraProduktuak)
+                    } else {
+                        Log.e("fetchMaxErreserba", jsonResponse.getString("message"))
+                        onResult(null)
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    onResult(null)
+                }
+            }
+        }
+    })
+}
+
+fun insertKomanda() {
+    val client = OkHttpClient()
+    val url = "http://10.0.2.2/insertEskaeraOsoa.php"
+
+    val ordaindua = 0
+
+    Log.d("insertKomanda", "EskaeraProduktua: ${eskaeraProduktuak.joinToString(", ") { "Name: ${it.name}, Quantity: ${it.quantity}, Price: ${it.price}" }}")
+
+    Log.d("Mahaia", MahaiaId.toString())
+
+    val prezioTotala = PrezioTotalaKalkulatu(eskaeraProduktuak)
+
+    Log.d(prezioTotala.toString(), "insertKomanda: ")
+    val jsonBody = JSONArray().apply {
+        val eskaeraJson = JSONObject().apply {
+            put("langilea_id", Erabiltzaileid)
+            put("erreserba_id", ErreserbaId)
+            put("mahaia_id", MahaiaId)
+            put("prezioTotala", prezioTotala)
+            put("ordaindua", ordaindua)
+
+        }
+        put(eskaeraJson)
     }
 
-    val requestBody = RequestBody.create(
-        "application/json; charset=utf-8".toMediaType(),
-        jsonBody.toString()
-    )
+    val requestBody = jsonBody.toString()
+        .toRequestBody("application/json; charset=utf-8".toMediaType())
 
     val request = Request.Builder()
         .url(url)
@@ -283,25 +511,154 @@ fun insertErreserba(langileaId: Int, mesaSeleccionada: Int, selectedItems: List<
     client.newCall(request).enqueue(object : Callback {
         override fun onFailure(call: Call, e: IOException) {
             e.printStackTrace()
+            Log.e("insertKomanda", "Error: ${e.localizedMessage}")
+        }
+
+        override fun onResponse(call: Call, response: Response) {
+            if (response.isSuccessful) {
+                response.body?.string()?.let { responseBody ->
+                    val jsonResponse = JSONObject(responseBody)
+                    if (jsonResponse.getBoolean("success")) {
+                        Log.i("insertKomanda", "Insert successful: ${jsonResponse.getString("message")}")
+                    } else {
+                        Log.e("insertKomanda", "Error: ${jsonResponse.getString("message")}")
+                    }
+                }
+            } else {
+                Log.e("insertKomanda", "Response failed with code ${response.code}")
+            }
+        }
+    })
+}
+
+fun PrezioTotalaKalkulatu(eskaeraProduktuak: List<EskaeraProduktua>): Double {
+    val grupadoPorReserva = eskaeraProduktuak.groupBy { it.name }
+    Log.d(eskaeraProduktuak.toString(), "PrezioTotalaKalkulatu: ")
+    return grupadoPorReserva.values.sumOf { grupo ->
+        grupo.sumOf { it.quantity * it.price }
+    }
+}
+
+
+
+
+sealed class Screen {
+    object CharlieApp : Screen()
+    object MainScreen : Screen()
+    object MahaiakAukeratu : Screen()
+    object KomandaAukeratu : Screen()
+    object EntranteakScreen : Screen()
+    object LehenPlateraScreen : Screen()
+    object PostreakScreen : Screen()
+    object EdariakScreen : Screen()
+    object KomandaScreen : Screen()
+    object ChatScreen : Screen()
+}
+
+
+@Composable
+fun NavigationHandler() {
+    var currentScreen by remember { mutableStateOf<Screen>(Screen.CharlieApp) }
+
+    when (currentScreen) {
+        is Screen.CharlieApp -> CharlieApp(onNavigateToMainScreen = { currentScreen = Screen.MainScreen }, onNavigateToChat = { currentScreen = Screen.ChatScreen })
+        is Screen.MainScreen -> MainScreen(onNavigateToMahaiakAukeratu = { currentScreen = Screen.MahaiakAukeratu }, onNavigateToChat = { currentScreen = Screen.ChatScreen }, onNavigateToCharliesApp = { currentScreen = Screen.MainScreen })
+        is Screen.MahaiakAukeratu -> MahaiakAukeratu(onNavigateToKomandaAukeratu = { currentScreen = Screen.KomandaAukeratu }, onNavigateToChat = { currentScreen = Screen.ChatScreen }, onNavigateToMainScreen = { currentScreen = Screen.MainScreen })
+        is Screen.KomandaAukeratu -> KomandaAukeratuScreen(
+            onNavigateToEntranteak = { currentScreen = Screen.EntranteakScreen },
+            onNavigateToLehenPlatera = { currentScreen = Screen.LehenPlateraScreen },
+            onNavigateToPostreak = { currentScreen = Screen.PostreakScreen },
+            onNavigateToEdariak = { currentScreen = Screen.EdariakScreen },
+            onNavigateToKomanda = { currentScreen = Screen.KomandaScreen },
+            onNavigateToChat = { currentScreen = Screen.ChatScreen },
+            onNavigateToMahaiakAukeratu = { currentScreen = Screen.MahaiakAukeratu } // Añadir navegación al chat
+        )
+        is Screen.EntranteakScreen -> EntranteakScreen(onNavigateToKomandaAukeratu = { currentScreen = Screen.KomandaAukeratu }, onNavigateToChat = { currentScreen = Screen.ChatScreen })
+        is Screen.LehenPlateraScreen -> LehenPlateraScreen(onNavigateToKomandaAukeratu = { currentScreen = Screen.KomandaAukeratu }, onNavigateToChat = { currentScreen = Screen.ChatScreen })
+        is Screen.PostreakScreen -> PostreakScreen(onNavigateToKomandaAukeratu = { currentScreen = Screen.KomandaAukeratu }, onNavigateToChat = { currentScreen = Screen.ChatScreen })
+        is Screen.EdariakScreen -> EdariakScreen(onNavigateToKomandaAukeratu = { currentScreen = Screen.KomandaAukeratu }, onNavigateToChat = { currentScreen = Screen.ChatScreen })
+        is Screen.KomandaScreen -> KomandaScreen(onNavigateToChat = { currentScreen = Screen.ChatScreen }, onNavigateToKomandaAukeratu = {currentScreen = Screen.KomandaAukeratu}, onNavigateToCharlieApp = {currentScreen = Screen.CharlieApp})
+        is Screen.ChatScreen -> ChatScreen(onNavigateToChat = {currentScreen = Screen.ChatScreen}, onNavigateToMahaiakAukeratu = {currentScreen = Screen.MahaiakAukeratu})  // Mostramos la pantalla del chat
+        else -> {}
+    }
+}
+
+
+fun insertErreserba(
+    selectedItems: List<EskaeraProduktua>,
+    erreserbaId: Int,
+    onResult: (Boolean) -> Unit
+) {
+    if (selectedItems.isEmpty()) {
+        Log.e("insertErreserba", "No hay productos seleccionados para insertar.")
+        onResult(false)
+        return
+    }
+
+    val client = OkHttpClient.Builder()
+        .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+        .writeTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+
+    val url = "http://10.0.2.2/insertEskaera.php"
+
+    val jsonBody = JSONArray().apply {
+        selectedItems.forEach { item ->
+            val productoJson = JSONObject().apply {
+                put("erreserba_id", erreserbaId)
+                put("produktu_izena", item.name)
+                put("produktuaKop", item.quantity)
+                put("prezioa", item.price)
+            }
+            put(productoJson)
+        }
+    }
+
+    Log.d("JSONBody", "JSON Enviado: $jsonBody")
+
+    val requestBody = jsonBody.toString()
+        .toRequestBody("application/json; charset=utf-8".toMediaType())
+
+    val request = Request.Builder()
+        .url(url)
+        .post(requestBody)
+        .build()
+
+    client.newCall(request).enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            Log.e("insertErreserba", "Error al realizar la solicitud: ${e.message}")
             onResult(false)
         }
 
         override fun onResponse(call: Call, response: Response) {
             if (response.isSuccessful) {
+                Log.d("insertErreserba", "Inserción exitosa")
                 onResult(true)
             } else {
+                Log.e("insertErreserba", "Error en la respuesta del servidor: ${response.code}")
                 onResult(false)
             }
         }
     })
 }
 
+
+
+
+
+
+
 @Composable
-fun ProduktuaListScreen(mota: Int, title: String, onNavigateToKomandaAukeratu: () -> Unit) {
+fun ProduktuaListScreen(
+    mota: Int,
+    title: String,
+    onNavigateToKomandaAukeratu: () -> Unit,
+    onNavigateToChat: () -> Unit
+) {
     var produktuak by remember { mutableStateOf<List<Produktua>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     val selectedQuantities = remember { mutableStateOf<Map<Int, Int>>(emptyMap()) }
-
 
     LaunchedEffect(Unit) {
         fetchProduktua { result ->
@@ -322,7 +679,7 @@ fun ProduktuaListScreen(mota: Int, title: String, onNavigateToKomandaAukeratu: (
         ) {
             Button(
                 border = BorderStroke(2.dp, Color.Black),
-                onClick = { /* Handle Atzera */ },
+                onClick = { onNavigateToKomandaAukeratu()},
                 colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
             ) {
                 Text(text = "Atzera", color = Color.Black)
@@ -330,11 +687,12 @@ fun ProduktuaListScreen(mota: Int, title: String, onNavigateToKomandaAukeratu: (
 
             Button(
                 border = BorderStroke(2.dp, Color.Black),
-                onClick = { /* Handle Txat */ },
+                onClick = { onNavigateToChat() },  // Navegar a la pantalla de chat
                 colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
             ) {
                 Text(text = "Txat", color = Color.Black)
             }
+
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -349,7 +707,6 @@ fun ProduktuaListScreen(mota: Int, title: String, onNavigateToKomandaAukeratu: (
                     itemName = produktua.izena,
                     initialQuantity = 0,
                     onQuantityChanged = { quantity ->
-                        // Update the quantity of the product in the map
                         selectedQuantities.value = selectedQuantities.value.toMutableMap().apply {
                             put(produktua.id, quantity)
                         }
@@ -363,7 +720,31 @@ fun ProduktuaListScreen(mota: Int, title: String, onNavigateToKomandaAukeratu: (
 
         Button(
             onClick = {
-                onNavigateToKomandaAukeratu()
+                val selectedItems = selectedQuantities.value.mapNotNull { (id, quantity) ->
+                    val produktua = produktuak.find { it.id == id }
+                    if (produktua != null && quantity > 0) {
+                        EskaeraProduktua(
+                            name = produktua.izena,
+                            quantity = quantity,
+                            price = produktua.prezioa.toDouble()
+                        )
+                    } else null
+                }
+
+                ErreserbaId?.let {
+                    insertErreserba(
+                        erreserbaId = it,
+                        selectedItems = selectedItems
+                    ) { success ->
+                        if (success) {
+                            // Navegar o mostrar éxito
+                            onNavigateToKomandaAukeratu()
+                        } else {
+                            // Mostrar error
+                            Log.e("InsertErreserba", "Error al insertar la comanda")
+                        }
+                    }
+                }
             },
             modifier = Modifier
                 .fillMaxWidth()
@@ -375,44 +756,59 @@ fun ProduktuaListScreen(mota: Int, title: String, onNavigateToKomandaAukeratu: (
     }
 }
 
+
+
 @Composable
-fun EntranteakScreen(onNavigateToKomandaAukeratu: () -> Unit) {
+fun EntranteakScreen(onNavigateToKomandaAukeratu: () -> Unit, onNavigateToChat: () -> Unit) {
     ProduktuaListScreen(
         mota = 1,
         title = "Entranteak",
-        onNavigateToKomandaAukeratu = onNavigateToKomandaAukeratu
+        onNavigateToKomandaAukeratu = onNavigateToKomandaAukeratu,
+        onNavigateToChat = onNavigateToChat
     )
 }
 
 @Composable
-fun LehenPlateraScreen(onNavigateToKomandaAukeratu: () -> Unit) {
+fun LehenPlateraScreen(onNavigateToKomandaAukeratu: () -> Unit, onNavigateToChat: () -> Unit) {
     ProduktuaListScreen(
         mota = 2,
         title = "Lehen Platerak",
-        onNavigateToKomandaAukeratu = onNavigateToKomandaAukeratu
+        onNavigateToKomandaAukeratu = onNavigateToKomandaAukeratu,
+        onNavigateToChat = onNavigateToChat
     )
 }
 
 @Composable
-fun PostreakScreen(onNavigateToKomandaAukeratu: () -> Unit) {
+fun PostreakScreen(onNavigateToKomandaAukeratu: () -> Unit, onNavigateToChat: () -> Unit) {
     ProduktuaListScreen(
         mota = 3,
         title = "Postreak",
-        onNavigateToKomandaAukeratu = onNavigateToKomandaAukeratu
+        onNavigateToKomandaAukeratu = onNavigateToKomandaAukeratu,
+        onNavigateToChat = onNavigateToChat
     )
 }
 
 @Composable
-fun EdariakScreen(onNavigateToKomandaAukeratu: () -> Unit) {
+fun EdariakScreen(onNavigateToKomandaAukeratu: () -> Unit, onNavigateToChat: () -> Unit) {
     ProduktuaListScreen(
         mota = 4,
         title = "Edariak",
-        onNavigateToKomandaAukeratu = onNavigateToKomandaAukeratu
+        onNavigateToKomandaAukeratu = onNavigateToKomandaAukeratu,
+        onNavigateToChat = onNavigateToChat
     )
 }
 
 @Composable
-fun CharlieApp(onNavigateToMainScreen: () -> Unit) {
+fun CharlieApp(onNavigateToMainScreen: () -> Unit, onNavigateToChat: () -> Unit) {
+    var isLoading by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        fetchHighestErreserbaId { result ->
+            ErreserbaId = result?.plus(1) // Incrementar en 1 después de obtener el valor
+            isLoading = false
+        }
+    }
+
     Scaffold(
         topBar = {
             Row(
@@ -430,11 +826,12 @@ fun CharlieApp(onNavigateToMainScreen: () -> Unit) {
                 }
                 Button(
                     border = BorderStroke(2.dp, Color.Black),
-                    onClick = { /* Acción del chat */ },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6600))
+                    onClick = { onNavigateToChat() },  // Navegar a la pantalla de chat
+                    colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
                 ) {
-                    Text("Txat", color = Color.Black)
+                    Text(text = "Txat", color = Color.Black)
                 }
+
             }
         }
     ) { paddingValues ->
@@ -445,23 +842,31 @@ fun CharlieApp(onNavigateToMainScreen: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Spacer(modifier = Modifier.height(20.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                Button(
-                    border = BorderStroke(2.dp, Color.Black),
-                    onClick = onNavigateToMainScreen,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6600))
-                ) {
-                    Text("Zerbitzaria", fontSize = 16.sp, color = Color.Black)
-                }
-                Button(
-                    border = BorderStroke(2.dp, Color.Black),
-                    onClick = { /* Acción para Sukaldaria */ },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6600))
-                ) {
-                    Text("Sukaldaria", fontSize = 16.sp, color = Color.Black)
+            if (isLoading) {
+                CircularProgressIndicator(color = Color(0xFFFF6600))
+            } else {
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                    Button(
+                        border = BorderStroke(2.dp, Color.Black),
+                        onClick = {
+                            onNavigateToMainScreen()
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6600))
+                    ) {
+                        Text("Zerbitzaria", fontSize = 16.sp, color = Color.Black)
+                    }
+                    Button(
+                        border = BorderStroke(2.dp, Color.Black),
+                        onClick = { /* Acción para Sukaldaria */ },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6600))
+                    ) {
+                        Text("Sukaldaria", fontSize = 16.sp, color = Color.Black)
+                    }
                 }
             }
         }
@@ -469,7 +874,7 @@ fun CharlieApp(onNavigateToMainScreen: () -> Unit) {
 }
 
 @Composable
-fun MainScreen(onNavigateToMahaiakAukeratu: (Zerbitzaria) -> Unit) {
+fun MainScreen(onNavigateToMahaiakAukeratu: () -> Unit, onNavigateToChat: () -> Unit, onNavigateToCharliesApp: () -> Unit) {
     var zerbitzariak by remember { mutableStateOf<List<Zerbitzaria>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
@@ -483,24 +888,31 @@ fun MainScreen(onNavigateToMahaiakAukeratu: (Zerbitzaria) -> Unit) {
     Scaffold(
         topBar = {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(10.dp),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Button(
                     border = BorderStroke(2.dp, Color.Black),
-                    onClick = { /* Acción de Atzera */ },
+                    onClick = { onNavigateToCharliesApp() },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6600))
                 ) { Text("Atzera", color = Color.Black) }
                 Button(
                     border = BorderStroke(2.dp, Color.Black),
-                    onClick = { /* Acción de Txat */ },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6600))
-                ) { Text("Txat", color = Color.Black) }
+                    onClick = { onNavigateToChat() },  // Navegar a la pantalla de chat
+                    colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
+                ) {
+                    Text(text = "Txat", color = Color.Black)
+                }
+
             }
         }
     ) { paddingValues ->
         Column(
-            modifier = Modifier.fillMaxSize().padding(paddingValues),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceEvenly
         ) {
@@ -510,11 +922,9 @@ fun MainScreen(onNavigateToMahaiakAukeratu: (Zerbitzaria) -> Unit) {
                 zerbitzariak.forEach { zerbitzaria ->
                     ZerbitzariaButton(
                         id = zerbitzaria.id,
-                        text = zerbitzaria.izena,
-                        zerbitzaria = zerbitzaria,
-                        onNavigateToMahaiakAukeratu = { selectedZerbitzaria ->
-                            onNavigateToMahaiakAukeratu(selectedZerbitzaria)
-                        }
+                        text = zerbitzaria.izenaZ,
+                        onNavigateToMahaiakAukeratu = onNavigateToMahaiakAukeratu,
+
                     )
                 }
             }
@@ -522,11 +932,8 @@ fun MainScreen(onNavigateToMahaiakAukeratu: (Zerbitzaria) -> Unit) {
     }
 }
 
-
-
-
 @Composable
-fun MahaiakAukeratu(zerbitzaria: Zerbitzaria, onNavigateToKomandaAukeratu: () -> Unit) {
+fun MahaiakAukeratu(onNavigateToKomandaAukeratu: () -> Unit, onNavigateToChat: () -> Unit, onNavigateToMainScreen: () -> Unit) {
     val tableList = remember { mutableStateOf<List<String>>(emptyList()) }
 
     LaunchedEffect(Unit) {
@@ -545,18 +952,19 @@ fun MahaiakAukeratu(zerbitzaria: Zerbitzaria, onNavigateToKomandaAukeratu: () ->
             ) {
                 Button(
                     border = BorderStroke(2.dp, Color.Black),
-                    onClick = { /* Acción de Atzera */ },
+                    onClick = { onNavigateToMainScreen() },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6600))
                 ) {
                     Text("Atzera", color = Color.Black)
                 }
                 Button(
                     border = BorderStroke(2.dp, Color.Black),
-                    onClick = { /* Acción de Txat */ },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6600))
+                    onClick = { onNavigateToChat() },  // Navegar a la pantalla de chat
+                    colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
                 ) {
-                    Text("Txat", color = Color.Black)
+                    Text(text = "Txat", color = Color.Black)
                 }
+
             }
         }
     ) { paddingValues ->
@@ -580,34 +988,28 @@ fun MahaiakAukeratu(zerbitzaria: Zerbitzaria, onNavigateToKomandaAukeratu: () ->
                         ) {
                             MahaiaButton(
                                 text = table,
-                                function = onNavigateToKomandaAukeratu
+                                function = onNavigateToKomandaAukeratu,
+                                onNavigateToChat = onNavigateToChat
                             )
                         }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.weight(1f))  // Esto empuja el texto hacia la parte inferior
+            Spacer(modifier = Modifier.weight(1f))
 
-            // Aquí agregas el nombre del Zerbitzaria en la parte inferior de la pantalla
-            Text(
-                text = "Zerbitzaria: ${zerbitzaria.izena}",
-                fontSize = 20.sp,
-                color = Color.Black,
-                modifier = Modifier.padding(16.dp)  // Agregar un poco de padding
-            )
+
         }
     }
 }
 
-
-
-
-
 @Composable
-fun MahaiaButton(text: String, function: () -> Unit) {
+fun MahaiaButton(text: String, function: () -> Unit, onNavigateToChat: () -> Unit) {
+
+
     Button(
-        onClick = function,
+        onClick ={function()
+                MahaiaId = text.toInt()},
         modifier = Modifier
             .padding(16.dp)  // Ajusta el padding
             .clip(CircleShape)  // Hace el botón redondo (si lo prefieres redondo)
@@ -619,14 +1021,15 @@ fun MahaiaButton(text: String, function: () -> Unit) {
     }
 }
 
-
 @Composable
 fun KomandaAukeratuScreen(
     onNavigateToEntranteak: () -> Unit,
     onNavigateToLehenPlatera: () -> Unit,
     onNavigateToPostreak: () -> Unit,
     onNavigateToEdariak: () -> Unit,
-    onNavigateToKomanda: () -> Unit
+    onNavigateToKomanda: () -> Unit,
+    onNavigateToChat: () -> Unit,
+    onNavigateToMahaiakAukeratu: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -640,7 +1043,7 @@ fun KomandaAukeratuScreen(
         ) {
             Button(
                 border = BorderStroke(2.dp, Color.Black),
-                onClick = { /* Acción de Atzera */ },
+                onClick = { onNavigateToMahaiakAukeratu() },
                 colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
             ) {
                 Text(text = "Atzera", color = Color.Black)
@@ -648,7 +1051,7 @@ fun KomandaAukeratuScreen(
 
             Button(
                 border = BorderStroke(2.dp, Color.Black),
-                onClick = { /* Acción de Txat */ },
+                onClick = { onNavigateToChat() },
                 colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
             ) {
                 Text(text = "Txat", color = Color.Black)
@@ -659,17 +1062,22 @@ fun KomandaAukeratuScreen(
 
         Button(
             onClick = onNavigateToEntranteak,
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
             colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
         ) {
             Text("Entranteak", color = Color.Black)
         }
 
+
         Spacer(modifier = Modifier.height(16.dp))
 
         Button(
             onClick = onNavigateToLehenPlatera,
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
             colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
         ) {
             Text("1. Platera", color = Color.Black)
@@ -679,7 +1087,9 @@ fun KomandaAukeratuScreen(
 
         Button(
             onClick = onNavigateToPostreak,
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
             colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
         ) {
             Text("Postreak", color = Color.Black)
@@ -689,7 +1099,9 @@ fun KomandaAukeratuScreen(
 
         Button(
             onClick = onNavigateToEdariak,
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
             colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
         ) {
             Text("Edaria", color = Color.Black)
@@ -699,7 +1111,9 @@ fun KomandaAukeratuScreen(
 
         Button(
             onClick = onNavigateToKomanda,
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
             colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
         ) {
             Text("Komanda", color = Color.Black)
@@ -711,12 +1125,14 @@ fun KomandaAukeratuScreen(
 fun ZerbitzariaButton(
     id: Int,
     text: String,
-    zerbitzaria: Zerbitzaria,  // Pasamos el Zerbitzaria completo aquí
-    onNavigateToMahaiakAukeratu: (Zerbitzaria) -> Unit
+    onNavigateToMahaiakAukeratu: () -> Unit,
 ) {
     Button(
         border = BorderStroke(2.dp, Color.Black),
-        onClick = { onNavigateToMahaiakAukeratu(zerbitzaria) },  // Llamamos a la función pasando el Zerbitzaria
+        onClick = {
+            Erabiltzaileid = id
+            onNavigateToMahaiakAukeratu()
+        },
         shape = RoundedCornerShape(50.dp),
         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6600)),
         modifier = Modifier
@@ -731,8 +1147,21 @@ fun ZerbitzariaButton(
 
 
 
+
 @Composable
-fun KomandaScreen() {
+fun KomandaScreen(onNavigateToChat: () -> Unit, onNavigateToKomandaAukeratu: () -> Unit, onNavigateToCharlieApp: () -> Unit) {
+    // Estado para almacenar los productos obtenidos
+    val products = remember { mutableStateOf<List<EskaeraProduktua>>(emptyList()) }
+
+    // Cargar los productos al iniciar la pantalla
+    LaunchedEffect(Unit) {
+        fetchMaxEskaera { result ->
+            result?.let {
+                products.value = it
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -746,8 +1175,7 @@ fun KomandaScreen() {
         ) {
             Button(
                 border = BorderStroke(2.dp, Color.Black),
-
-                onClick = { /* Handle Atzera */ },
+                onClick = { onNavigateToKomandaAukeratu() },
                 colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
             ) {
                 Text(text = "Atzera", color = Color.Black)
@@ -755,12 +1183,12 @@ fun KomandaScreen() {
 
             Button(
                 border = BorderStroke(2.dp, Color.Black),
-
-                onClick = { /* Handle Txat */ },
+                onClick = { onNavigateToChat() },  // Navegar a la pantalla de chat
                 colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
             ) {
                 Text(text = "Txat", color = Color.Black)
             }
+
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -774,28 +1202,33 @@ fun KomandaScreen() {
         Spacer(modifier = Modifier.height(16.dp))
 
         // List of items
-        val items = listOf(
-            "HAMBURGUESA DE POLLO",
-            "HAMBURGUESA COMPLETA",
-            "HAMBURGUESA COMPLETA",
-            "HAMBURGUESA COMPLETA",
-            "HAMBURGUESA COMPLETA",
-            "HAMBURGUESA COMPLETA",
-            "HAMBURGUESA COMPLETA"
-        )
+        LazyColumn(modifier = Modifier
+            .fillMaxSize()
+            .weight(1f)) {
+            items(products.value) { product ->
+                // Log each product's details to see in Logcat
+                Log.d("KomandaScreen", "Producto: ${product.name}, Cantidad: ${product.quantity}, Precio: ${product.price}")
 
-        items.forEach { item ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    horizontalAlignment = Alignment.Start
+                ) {
+                    Text(text = "Izena: ${product.name}", color = Color.Black)
+                    Text(text = "Kopurua: ${product.quantity}", color = Color.Black)
+                    Text(text = "Prezioa: ${product.price}€", color = Color.Black)
+                }
 
-            Spacer(modifier = Modifier.height(8.dp))
+                Divider(color = Color.Gray, thickness = 1.dp)
+            }
         }
-
-        Spacer(modifier = Modifier.weight(1f))
 
         // Bottom Button
         Button(
             border = BorderStroke(2.dp, Color.Black),
-
-            onClick = { /* Handle Komanda bukatu */ },
+            onClick = {  onNavigateToCharlieApp()
+                insertKomanda()},
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 16.dp)
@@ -807,7 +1240,6 @@ fun KomandaScreen() {
         }
     }
 }
-
 @Composable
 fun KomandaItemRow(itemName: String, initialQuantity: Int, onQuantityChanged: (Int) -> Unit) {
     var quantity by remember { mutableStateOf(initialQuantity) }
@@ -846,7 +1278,10 @@ fun KomandaAukeratuScreenPreview() {
             onNavigateToLehenPlatera = {},
             onNavigateToPostreak = {},
             onNavigateToEdariak = {},
-            onNavigateToKomanda = {}
+            onNavigateToKomanda = {},
+            onNavigateToChat = {},
+            onNavigateToMahaiakAukeratu = {}
+
         )
     }
 }
@@ -855,11 +1290,10 @@ fun KomandaAukeratuScreenPreview() {
 @Composable
 fun MahaiakAukeratuPreview() {
     ZerbitzariAppTheme {
-        // Creas un objeto Zerbitzaria con valores estáticos
-        val testZerbitzaria = Zerbitzaria(id = 1, izena = "Test Zerbitzaria")
-
-        // Pasamos el objeto Zerbitzaria y una función vacía para la navegación
-        MahaiakAukeratu(zerbitzaria = testZerbitzaria, onNavigateToKomandaAukeratu = {})
+        MahaiakAukeratu(onNavigateToKomandaAukeratu = {},
+            onNavigateToChat = {},
+            onNavigateToMainScreen = {}
+        )
     }
 }
 
@@ -868,8 +1302,9 @@ fun MahaiakAukeratuPreview() {
 @Composable
 fun MainScreenPreview() {
     ZerbitzariAppTheme {
-        // Definimos una función vacía para la navegación
-        MainScreen(onNavigateToMahaiakAukeratu = { /* No hacemos nada en el Preview */ })
+        MainScreen(onNavigateToMahaiakAukeratu = { },
+            onNavigateToChat = {},
+            onNavigateToCharliesApp = {})
     }
 }
 
@@ -878,7 +1313,9 @@ fun MainScreenPreview() {
 @Composable
 fun KomandaScreenPreview() {
     ZerbitzariAppTheme {
-        KomandaScreen()
+        KomandaScreen(onNavigateToChat = {},
+            onNavigateToKomandaAukeratu = {},
+            onNavigateToCharlieApp = {})
     }
 }
 
@@ -886,7 +1323,7 @@ fun KomandaScreenPreview() {
 @Composable
 fun EntranteakScreenPreview() {
     ZerbitzariAppTheme {
-        EntranteakScreen(onNavigateToKomandaAukeratu = {})
+        EntranteakScreen(onNavigateToKomandaAukeratu = {}, onNavigateToChat = {})
     }
 }
 
@@ -894,7 +1331,7 @@ fun EntranteakScreenPreview() {
 @Composable
 fun CharlieAppPreview() {
     ZerbitzariAppTheme {
-        CharlieApp(onNavigateToMainScreen = {})
+        CharlieApp(onNavigateToMainScreen = {}, onNavigateToChat = {})
     }
 }
 
@@ -902,7 +1339,7 @@ fun CharlieAppPreview() {
 @Composable
 fun LehenPlateraScreenPreview() {
     ZerbitzariAppTheme {
-        LehenPlateraScreen(onNavigateToKomandaAukeratu = {})
+        LehenPlateraScreen(onNavigateToKomandaAukeratu = {}, onNavigateToChat = {})
     }
 }
 
@@ -910,7 +1347,7 @@ fun LehenPlateraScreenPreview() {
 @Composable
 fun PostreakScreenPreview() {
     ZerbitzariAppTheme {
-        PostreakScreen(onNavigateToKomandaAukeratu = {})
+        PostreakScreen(onNavigateToKomandaAukeratu = {}, onNavigateToChat = {})
     }
 }
 
@@ -918,8 +1355,6 @@ fun PostreakScreenPreview() {
 @Composable
 fun EdariakScreenPreview() {
     ZerbitzariAppTheme {
-        EdariakScreen(onNavigateToKomandaAukeratu = {})
+        EdariakScreen(onNavigateToKomandaAukeratu = {}, onNavigateToChat = {})
     }
 }
-
-
